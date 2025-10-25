@@ -130,3 +130,4 @@ We plan a v2 vault format and enhancements to harden against offline attacks and
 - Clipboard auto-clear timers, idle autolock, strength meter
 
 Details: see PROJECTV2.md. Implementation will be delivered in small PRs.
+# password-vault
