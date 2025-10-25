@@ -36,6 +36,14 @@ public class TerminalUI
         while (true)
         {
             var pw1 = AnsiConsole.Prompt(new TextPrompt<string>("[green]Set master password:[/]").Secret());
+            var score = PasswordVault.Services.PasswordStrength.EstimateScore(pw1);
+            var minScore = PasswordVault.Services.SecurityPolicy.Current.MinPasswordScore;
+            var minLen = PasswordVault.Services.SecurityPolicy.Current.MinPasswordLength;
+            if (pw1.Length < minLen || score < minScore)
+            {
+                AnsiConsole.MarkupLine($"[red]Password too weak (len>={minLen}, score>={minScore}). Try a longer passphrase with mixed characters.[/]");
+                continue;
+            }
             var pw2 = AnsiConsole.Prompt(new TextPrompt<string>("[green]Confirm master password:[/]").Secret());
             if (pw1 == pw2 && !string.IsNullOrWhiteSpace(pw1)) return pw1;
             AnsiConsole.MarkupLine("[red]Passwords do not match or empty. Try again.[/]");
@@ -53,7 +61,7 @@ public class TerminalUI
         return AnsiConsole.Prompt(
             new SelectionPrompt<string>()
                 .Title("[green]Choose an action[/]")
-                .AddChoices("Add Entry", "Get Entry", "List Entries", "Search Entries (fuzzy)", "Delete Entry", "Generate Password", "Change Master Password", "Export Vault", "Import Vault", "Save & Lock", "Quit"));
+                .AddChoices("Add Entry", "Get Entry", "List Entries", "Search Entries (fuzzy)", "Delete Entry", "Generate Password", "Change Master Password", "Export Vault", "Import Vault", "Delete Account", "Save & Lock", "Quit"));
     }
 
     public VaultEntry PromptNewEntry()
@@ -64,7 +72,8 @@ public class TerminalUI
         if (string.IsNullOrEmpty(password))
         {
             password = PasswordVault.Services.PasswordGenerator.Generate();
-            AnsiConsole.MarkupLine($"[gray]Generated password:[/] [bold]{password}[/]");
+            Console.WriteLine($"GENERATED PASSWORD: {password}");
+            // AnsiConsole.MarkupLine($"[gray]Generated password:[/] {password.ToString()}");
         }
         var notes = AnsiConsole.Prompt(new TextPrompt<string>("[yellow]Notes (optional):[/]").AllowEmpty());
         return new VaultEntry { Name = name, Username = username, Password = password, Notes = notes, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow };
@@ -89,8 +98,8 @@ public class TerminalUI
 
         if (offerCopy && AnsiConsole.Confirm("Copy password to clipboard?"))
         {
-            ClipboardService.SetText(entry.Password);
-            AnsiConsole.MarkupLine("[green]Password copied to clipboard.[/]");
+            PasswordVault.Services.ClipboardHelper.StartCopyWithAutoClear(entry.Password, TimeSpan.FromSeconds(PasswordVault.Services.SecurityPolicy.Current.ClipboardClearSeconds));
+            AnsiConsole.MarkupLine($"[green]Password copied. Will clear in {PasswordVault.Services.SecurityPolicy.Current.ClipboardClearSeconds}s.[/]");
         }
     }
 
@@ -163,6 +172,20 @@ public class TerminalUI
         return AnsiConsole.Confirm(message);
     }
 
+    public string PromptExactInput(string title)
+    {
+        return AnsiConsole.Ask<string>($"[yellow]{title}[/]");
+    }
+
+    public bool PromptUpgradeKdf(string currentSpec, string recommendedSpec)
+    {
+        var choice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title($"[yellow]Upgrade vault encryption?\nCurrent: {currentSpec}\nRecommended: {recommendedSpec}[/]")
+                .AddChoices("Upgrade now", "Not now"));
+        return choice == "Upgrade now";
+    }
+
     public void PressReturnToContinue()
     {
         AnsiConsole.WriteLine();
@@ -172,7 +195,7 @@ public class TerminalUI
 
     public void CopyToClipboard(string copy)
     {
-        if ( AnsiConsole.Confirm("Copy password to clipboard?"))
+        if (AnsiConsole.Confirm("Copy password to clipboard?"))
         {
             ClipboardService.SetText(copy);
             AnsiConsole.MarkupLine("[green]Password copied to clipboard.[/]");

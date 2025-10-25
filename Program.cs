@@ -60,6 +60,16 @@ public class Program
                 {
                     masterPassword = ui.PromptUnlock();
                     payload = vaultService.LoadVault(masterPassword);
+
+                    // Migration prompt: if v1, offer upgrade to v2 (PBKDF2 600k + AAD)
+                    if (vaultService.GetVaultFormatVersion() == 1)
+                    {
+                        if (ui.PromptUpgradeKdf("PBKDF2 210k (v1)", "PBKDF2 600k + AAD (v2)"))
+                        {
+                            vaultService.SaveVaultV2(masterPassword, payload);
+                            ui.AnyMessage("green", "Vault upgraded to v2.");
+                        }
+                    }
                     break;
                 }
                 catch
@@ -93,6 +103,7 @@ public class Program
                     }
                     // autosave after mutation
                     vaultService.SaveVault(masterPassword, payload);
+                    ui.PressReturnToContinue();
                     break;
 
                 case "Get Entry":
@@ -112,13 +123,52 @@ public class Program
                 case "Delete Entry":
                     var del = ui.PromptEntryName("Entry name to delete:");
                     var target = payload.Entries.FirstOrDefault(e => string.Equals(e.Name, del, StringComparison.OrdinalIgnoreCase));
+
                     if (target == null) { ui.AnyMessage("red", "Not found."); break; }
-                    if (ui.ConfirmDelete(target.Name))
+                    // ask the user to enter their password before authorising delete
+
+                    int count = 0;
+                    int maximumTries = 3;
+
+                    while (true)
                     {
-                        payload.Entries.Remove(target);
+                        count++;
+                        string checkUserMasterPassword = ui.PromptUnlock();
+                        try
+                        {
+                            payload = vaultService.LoadVault(checkUserMasterPassword);
+                            break;
+                        }
+                        catch
+                        {
+                            if (count == maximumTries)
+                            {
+                                ui.AnyMessage("red", "You have exhausted your trials. Try later.");
+                                Environment.Exit(1);
+                            }
+                            ui.AnyMessage(
+                                "red",
+                                $"Wrong master password. Try again. You have {maximumTries - count} trials left."
+                            );
+                            continue;
+                        }
+                    }
+
+                    // Re-locate the target in the freshly reloaded payload, then remove by name
+                    var refreshedTarget = payload.Entries.FirstOrDefault(e => string.Equals(e.Name, del, StringComparison.OrdinalIgnoreCase));
+                    if (refreshedTarget == null) {
+                        ui.AnyMessage("red", "Not found.");
+                        ui.PressReturnToContinue();
+                        break; 
+                    }
+
+                    if (ui.ConfirmDelete(refreshedTarget.Name))
+                    {
+                        payload.Entries.RemoveAll(e => string.Equals(e.Name, refreshedTarget.Name, StringComparison.OrdinalIgnoreCase));
                         ui.AnyMessage("green", "Deleted.");
                         // autosave after mutation
                         vaultService.SaveVault(masterPassword, payload);
+                        ui.PressReturnToContinue();
                     }
                     break;
 
@@ -193,6 +243,59 @@ public class Program
                     catch (Exception ex)
                     {
                         ui.AnyMessage("red", $"Import failed: {ex.Message}");
+                    }
+                    break;
+
+                case "Delete Account":
+                    // Re-authenticate user
+                    int tries = 0;
+                    int maxTries = 3;
+                    while (true)
+                    {
+                        tries++;
+                        var pw = ui.PromptUnlock();
+                        try
+                        {
+                            // If this succeeds, the password is valid
+                            payload = vaultService.LoadVault(pw);
+                            break;
+                        }
+                        catch
+                        {
+                            if (tries == maxTries)
+                            {
+                                ui.AnyMessage("red", "You have exhausted your trials. Try later.");
+                                Environment.Exit(1);
+                            }
+                            ui.AnyMessage("red", $"Wrong master password. Try again. You have {maxTries - tries} trials left.");
+                        }
+                    }
+
+                    // Require exact phrase
+                    var phrase = ui.PromptExactInput("Type 'delete my account' to confirm intent:");
+                    if (!string.Equals(phrase.Trim(), "delete my account", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ui.AnyMessage("red", "Phrase mismatch. Aborting.");
+                        ui.PressReturnToContinue();
+                        break;
+                    }
+
+                    // Final confirmation
+                    if (!ui.Confirm("This will permanently delete your vault file and cannot be undone. Proceed?"))
+                    {
+                        ui.AnyMessage("yellow", "Cancelled.");
+                        break;
+                    }
+
+                    try
+                    {
+                        if (System.IO.File.Exists(vaultPath)) System.IO.File.Delete(vaultPath);
+                        ui.AnyMessage("green", "Account deleted. Exiting.");
+                        Environment.Exit(0);
+                    }
+                    catch (Exception ex)
+                    {
+                        ui.AnyMessage("red", $"Delete failed: {ex.Message}");
                     }
                     break;
 
